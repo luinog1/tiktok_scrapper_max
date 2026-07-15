@@ -25,6 +25,12 @@ export interface TikTokPost {
   };
   engagementRate: number;
   trendTier: 'VIRAL' | 'HOT' | 'RISING' | 'NORMAL';
+  /** URL direta do vídeo CDN (vinda da Apify). */
+  videoUrl?: string;
+  /** URL da imagem de capa/thumbnail. */
+  coverUrl?: string;
+  /** Posts de foto (carrossel) — lista de URLs de imagem. */
+  images?: string[];
 }
 
 export type SortField = 'playCount' | 'diggCount' | 'shareCount' | 'commentCount' | 'createTime';
