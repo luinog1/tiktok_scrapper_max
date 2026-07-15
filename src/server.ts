@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import express from 'express';
+import cors from 'cors';
 import { CONFIG } from './config.js';
 import { extractByHashtag } from './extractor/hashtag.js';
 import { extractByKeyword } from './extractor/keyword.js';
@@ -14,6 +15,20 @@ import { SortField } from './types/tiktok.js';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
+
+/**
+ * CORREÇÃO: CORS liberado para permitir chamadas diretas do frontend
+ * hospedado em outro domínio (ex.: Vercel). Configure origins permitidas
+ * via env CORS_ORIGINS (separadas por vírgula). Vazio = libera todas.
+ */
+const corsOrigins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+app.use(
+  cors(
+    corsOrigins.length > 0
+      ? { origin: corsOrigins }
+      : { origin: true }
+  )
+);
 
 const port = Number(process.env.PORT || 3000);
 const serviceApiKey = process.env.SERVICE_API_KEY || '';
@@ -32,7 +47,14 @@ app.post('/run', async (req, res) => {
       }
     }
 
-    if (!CONFIG.APIFY_API_TOKEN) {
+    /**
+     * Token da Apify: prioriza a variável de ambiente (deploy próprio).
+     * Se não estiver setada, aceita o header `x-apify-token` enviado pelo
+     * frontend — assim cada usuário pode usar o próprio token da Apify.
+     */
+    const headerToken = req.header('x-apify-token') || '';
+    const effectiveToken = CONFIG.APIFY_API_TOKEN || headerToken;
+    if (!effectiveToken) {
       return res.status(500).json({ ok: false, error: 'APIFY_API_TOKEN not configured' });
     }
 
@@ -56,11 +78,22 @@ app.post('/run', async (req, res) => {
 
     isRunning = true;
 
+    // Se vier token pelo header, injeta no CONFIG em runtime para esta requisição
+    const originalToken = CONFIG.APIFY_API_TOKEN;
+    if (!originalToken && headerToken) {
+      (CONFIG as any).APIFY_API_TOKEN = headerToken;
+    }
+
     let rawItems: any[] = [];
-    if (keyword) {
-      rawItems = await extractByKeyword([String(keyword)], Number(max));
-    } else {
-      rawItems = await extractByHashtag((hashtags as string[]).map(String), Number(max));
+    try {
+      if (keyword) {
+        rawItems = await extractByKeyword([String(keyword)], Number(max));
+      } else {
+        rawItems = await extractByHashtag((hashtags as string[]).map(String), Number(max));
+      }
+    } finally {
+      // restaura o token original (não vaza entre requisições)
+      (CONFIG as any).APIFY_API_TOKEN = originalToken;
     }
 
     let posts = rawItems.map(mapRawToTikTokPost);
@@ -77,10 +110,17 @@ app.post('/run', async (req, res) => {
       await writeCsv(posts, `${output}.csv`);
     }
 
+    /**
+     * CORREÇÃO: antes era `posts.slice(0, 10)` fixo, ignorando o `max`
+     * pedido pelo cliente. Agora honra o `max` (limitado a 50 para
+     * evitar payloads enormes).
+     */
+    const topLimit = Math.min(Math.max(1, Number(max) || 10), 50);
+
     return res.status(200).json({
       ok: true,
       total: posts.length,
-      top: posts.slice(0, 10),
+      top: posts.slice(0, topLimit),
       output,
       format,
     });
