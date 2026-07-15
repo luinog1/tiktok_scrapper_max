@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import express from 'express';
-import cors from 'cors';
+import type { Request, Response, NextFunction } from 'express';
 import { CONFIG } from './config.js';
 import { extractByHashtag } from './extractor/hashtag.js';
 import { extractByKeyword } from './extractor/keyword.js';
@@ -17,18 +17,43 @@ const app = express();
 app.use(express.json({ limit: '1mb' }));
 
 /**
- * CORREÇÃO: CORS liberado para permitir chamadas diretas do frontend
- * hospedado em outro domínio (ex.: Vercel). Configure origins permitidas
- * via env CORS_ORIGINS (separadas por vírgula). Vazio = libera todas.
+ * CORREÇÃO: CORS implementado manualmente (sem pacote externo).
+ *
+ * Configure as origins permitidas via env CORS_ORIGINS (separadas por
+ * vírgula). Se vazio, libera todas (*). Funciona para requests simples
+ * e para preflight (OPTIONS).
  */
-const corsOrigins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
-app.use(
-  cors(
-    corsOrigins.length > 0
-      ? { origin: corsOrigins }
-      : { origin: true }
-  )
-);
+const corsOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function corsMiddleware(req: Request, res: Response, next: NextFunction) {
+  const origin = req.headers.origin || '';
+  const allowed =
+    corsOrigins.length === 0 || (origin && corsOrigins.includes(origin));
+
+  if (allowed && origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  } else if (corsOrigins.length === 0) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, x-api-key, x-apify-token'
+  );
+  res.setHeader('Access-Control-Max-Age', '86400');
+
+  // Responde preflight imediatamente
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+  next();
+}
+app.use(corsMiddleware);
 
 const port = Number(process.env.PORT || 3000);
 const serviceApiKey = process.env.SERVICE_API_KEY || '';
