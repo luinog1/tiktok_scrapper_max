@@ -1,0 +1,40 @@
+{
+  "name": "tiktok-trend-extractor",
+  "version": "1.0.0",
+  "description": "CLI para extração e rankeamento de trends do TikTok via Apify",
+  "main": "dist/index.js",
+  "bin": {
+    "tiktok-extractor": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": ["tiktok", "apify", "cli", "trends"],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "apify-client": "^2.10.0",
+    "axios": "^1.7.7",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "fs-extra": "^11.2.0",
+    "json2csv": "^6.0.0-alpha.2",
+    "ora": "^8.1.0",
+    "p-limit": "^6.1.0"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^22.7.4",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.2"
+  }
+}

@@ -1,0 +1,6 @@
+services:
+  - type: worker
+    name: tiktok-trend-extractor
+    env: docker
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true

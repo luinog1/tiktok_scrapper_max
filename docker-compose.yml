@@ -1,0 +1,10 @@
+version: '3.9'
+services:
+  tiktok-extractor:
+    build: .
+    container_name: tiktok-extractor
+    env_file:
+      - .env
+    command: ["search", "--keyword", "receita fitness", "--max", "20", "--format", "both", "--output", "output/results"]
+    volumes:
+      - ./output:/app/output
