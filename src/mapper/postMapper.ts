@@ -7,6 +7,45 @@ export function mapRawToTikTokPost(raw: any): TikTokPost {
   const commentCount = Number(raw.commentCount || raw.stats?.commentCount || 0);
   const engagementRate = playCount > 0 ? ((diggCount + shareCount + commentCount) / playCount) * 100 : 0;
 
+  // Mídia: o actor clockworks/tiktok-scraper pode retornar a URL direta do
+  // vídeo em vários campos dependendo da versão do schema. Priorizamos os
+  // mais comuns. Quando disponível, o frontend usa essa URL direta no
+  // download (evitando scrape da página do TikTok).
+  const videoUrl: string | undefined =
+    raw.videoUrl ||
+    raw.videoMeta?.downloadAddr ||
+    raw.videoMeta?.playAddr ||
+    raw.video?.downloadAddr ||
+    raw.video?.playAddr ||
+    raw.video?.playAddress?.UrlList?.[0] ||
+    undefined;
+
+  const coverUrl: string | undefined =
+    raw.imageUrl ||
+    raw.coverUrl ||
+    raw.videoMeta?.coverUrl ||
+    raw.videoMeta?.originCoverUrl ||
+    raw.video?.cover ||
+    raw.video?.originCover ||
+    undefined;
+
+  // Posts de foto (carrossel) — extrai lista de URLs de imagem
+  let images: string[] | undefined;
+  const imagePost = raw.imagePost || raw.images;
+  if (imagePost) {
+    const rawImages = Array.isArray(imagePost) ? imagePost : imagePost.imagesList || imagePost.images;
+    if (Array.isArray(rawImages)) {
+      images = rawImages
+        .map((img: any) =>
+          typeof img === 'string'
+            ? img
+            : img?.url || img?.imageURL?.urlList?.[0] || img?.urlList?.[0] || ''
+        )
+        .filter((u: string) => u.length > 0);
+      if (images.length === 0) images = undefined;
+    }
+  }
+
   return {
     id: String(raw.id || raw.videoId || ''),
     url: raw.webVideoUrl || raw.url || '',
@@ -36,5 +75,8 @@ export function mapRawToTikTokPost(raw: any): TikTokPost {
     },
     engagementRate,
     trendTier: 'NORMAL',
+    videoUrl,
+    coverUrl,
+    images,
   };
 }
