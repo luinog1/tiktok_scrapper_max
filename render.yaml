@@ -1,6 +1,14 @@
 services:
-  - type: worker
+  - type: web
     name: tiktok-trend-extractor
-    env: docker
-    dockerfilePath: ./Dockerfile
+    env: node
+    buildCommand: yarn && yarn build
+    startCommand: yarn start
     autoDeploy: true
+    envVars:
+      - key: APIFY_API_TOKEN
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: SERVICE_API_KEY
+        sync: false
