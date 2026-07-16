@@ -3,6 +3,7 @@ dotenv.config();
 
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
+import axios from 'axios';
 import { CONFIG } from './config.js';
 import { extractByHashtag } from './extractor/hashtag.js';
 import { extractByKeyword } from './extractor/keyword.js';
@@ -43,6 +44,11 @@ function corsMiddleware(req: Request, res: Response, next: NextFunction) {
   res.setHeader(
     'Access-Control-Allow-Headers',
     'Content-Type, x-api-key, x-apify-token'
+  );
+  // Permite ao frontend ler o nome/tamanho do arquivo no download via fetch
+  res.setHeader(
+    'Access-Control-Expose-Headers',
+    'Content-Disposition, Content-Length, Content-Range'
   );
   res.setHeader('Access-Control-Max-Age', '86400');
 
@@ -95,6 +101,13 @@ app.post('/run', async (req, res) => {
       minViews = 0,
       format = 'json',
       output = 'output/results',
+      /**
+       * Quando true (padrão), a Apify baixa os vídeos e devolve URLs do
+       * key-value store dela em `videoUrl` — necessário para o download
+       * funcionar (URLs da CDN do TikTok expiram/exigem cookie de sessão).
+       * É um add-on pago da Apify; envie false para economizar créditos.
+       */
+      downloadVideos = true,
     } = req.body || {};
 
     if (!keyword && (!Array.isArray(hashtags) || hashtags.length === 0)) {
@@ -112,9 +125,13 @@ app.post('/run', async (req, res) => {
     let rawItems: any[] = [];
     try {
       if (keyword) {
-        rawItems = await extractByKeyword([String(keyword)], Number(max));
+        rawItems = await extractByKeyword([String(keyword)], Number(max), Boolean(downloadVideos));
       } else {
-        rawItems = await extractByHashtag((hashtags as string[]).map(String), Number(max));
+        rawItems = await extractByHashtag(
+          (hashtags as string[]).map(String),
+          Number(max),
+          Boolean(downloadVideos)
+        );
       }
     } finally {
       // restaura o token original (não vaza entre requisições)
@@ -153,6 +170,130 @@ app.post('/run', async (req, res) => {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });
   } finally {
     isRunning = false;
+  }
+});
+
+/**
+ * CORREÇÃO (download bloqueado pelo TikTok):
+ *
+ * O frontend baixava o vídeo direto da CDN do TikTok a partir do browser.
+ * A CDN bloqueia isso de duas formas: CORS (fetch cross-origin negado) e
+ * hotlink protection (403 sem `Referer`/`User-Agent` de browser).
+ *
+ * Este endpoint faz proxy do download pelo backend: busca o vídeo na CDN
+ * com os headers que o TikTok espera e faz stream para o cliente com
+ * Content-Disposition, permitindo salvar o arquivo.
+ *
+ * Uso: GET /download?url=<videoUrl-encodado>&filename=meuvideo.mp4
+ */
+const TIKTOK_CDN_SUFFIXES = [
+  '.tiktokcdn.com',
+  '.tiktokcdn-us.com',
+  '.tiktokcdn-eu.com',
+  '.tiktokv.com',
+  '.tiktokv.us',
+  '.ibytedtos.com',
+  '.ibyteimg.com',
+  '.byteoversea.com',
+  '.bytecdn.cn',
+  '.muscdn.com',
+  'api.apify.com', // vídeos armazenados na Apify (shouldDownloadVideos)
+];
+
+function isAllowedMediaHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return TIKTOK_CDN_SUFFIXES.some(
+    (suffix) => host === suffix.replace(/^\./, '') || host.endsWith(suffix)
+  );
+}
+
+app.get('/download', async (req, res) => {
+  try {
+    // Mesma auth do /run; aceita também ?key= para permitir <a href> direto
+    if (serviceApiKey) {
+      const provided = req.header('x-api-key') || String(req.query.key || '');
+      if (provided !== serviceApiKey) {
+        return res.status(401).json({ ok: false, error: 'Unauthorized' });
+      }
+    }
+
+    const rawUrl = String(req.query.url || '');
+    if (!rawUrl) {
+      return res.status(400).json({ ok: false, error: 'Missing "url" query param' });
+    }
+
+    let target: URL;
+    try {
+      target = new URL(rawUrl);
+    } catch {
+      return res.status(400).json({ ok: false, error: 'Invalid "url"' });
+    }
+    if (target.protocol !== 'https:' || !isAllowedMediaHost(target.hostname)) {
+      return res.status(400).json({ ok: false, error: 'URL host not allowed' });
+    }
+
+    // Registros do key-value store da Apify podem exigir autenticação —
+    // usa o token do servidor (ou o enviado pelo cliente via header/query).
+    const isApifyHost = target.hostname.toLowerCase().endsWith('api.apify.com');
+    const apifyToken =
+      CONFIG.APIFY_API_TOKEN ||
+      req.header('x-apify-token') ||
+      String(req.query.apifyToken || '');
+
+    const upstream = await axios.get(target.toString(), {
+      responseType: 'stream',
+      timeout: CONFIG.REQUEST_TIMEOUT_MS,
+      maxRedirects: 5,
+      // Headers que a CDN do TikTok exige para não retornar 403
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Referer: 'https://www.tiktok.com/',
+        Accept: '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        ...(isApifyHost && apifyToken ? { Authorization: `Bearer ${apifyToken}` } : {}),
+        ...(req.headers.range ? { Range: String(req.headers.range) } : {}),
+      },
+      validateStatus: () => true,
+    });
+
+    if (upstream.status === 401 || upstream.status === 403) {
+      upstream.data?.destroy?.();
+      return res.status(410).json({
+        ok: false,
+        error: isApifyHost
+          ? `Apify recusou o acesso ao vídeo armazenado (HTTP ${upstream.status}) — verifique o APIFY_API_TOKEN do servidor.`
+          : 'TikTok CDN rejeitou o download (403). URLs de vídeo do TikTok expiram em poucas horas — refaça a busca para obter uma URL nova.',
+      });
+    }
+    if (upstream.status >= 400) {
+      upstream.data?.destroy?.();
+      return res
+        .status(502)
+        .json({ ok: false, error: `Upstream returned HTTP ${upstream.status}` });
+    }
+
+    const filename =
+      String(req.query.filename || '').replace(/[^\w.\-]+/g, '_') || 'tiktok-video.mp4';
+    res.status(upstream.status); // 200 ou 206 (Range)
+    res.setHeader('Content-Type', String(upstream.headers['content-type'] || 'video/mp4'));
+    if (upstream.headers['content-length']) {
+      res.setHeader('Content-Length', String(upstream.headers['content-length']));
+    }
+    if (upstream.headers['content-range']) {
+      res.setHeader('Content-Range', String(upstream.headers['content-range']));
+      res.setHeader('Accept-Ranges', 'bytes');
+    }
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    upstream.data.pipe(res);
+    upstream.data.on('error', () => res.destroy());
+    res.on('close', () => upstream.data?.destroy?.());
+  } catch (error: any) {
+    if (!res.headersSent) {
+      return res.status(500).json({ ok: false, error: error?.message || String(error) });
+    }
+    res.destroy();
   }
 });
 
