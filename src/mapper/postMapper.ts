@@ -7,11 +7,12 @@ export function mapRawToTikTokPost(raw: any): TikTokPost {
   const commentCount = Number(raw.commentCount || raw.stats?.commentCount || 0);
   const engagementRate = playCount > 0 ? ((diggCount + shareCount + commentCount) / playCount) * 100 : 0;
 
-  // Mídia: o actor clockworks/tiktok-scraper pode retornar a URL direta do
-  // vídeo em vários campos dependendo da versão do schema. Priorizamos os
-  // mais comuns. Quando disponível, o frontend usa essa URL direta no
-  // download (evitando scrape da página do TikTok).
+  // Mídia: prioriza `mediaUrls` — quando `shouldDownloadVideos: true`, a
+  // Apify baixa o vídeo e devolve aqui um link do key-value store dela,
+  // baixável de qualquer lugar (as URLs diretas da CDN do TikTok, usadas
+  // como fallback abaixo, são atreladas à sessão do scrape e expiram).
   const videoUrl: string | undefined =
+    (Array.isArray(raw.mediaUrls) && raw.mediaUrls.find((u: any) => typeof u === 'string' && u)) ||
     raw.videoUrl ||
     raw.videoMeta?.downloadAddr ||
     raw.videoMeta?.playAddr ||
