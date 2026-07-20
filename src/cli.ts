@@ -7,6 +7,7 @@ import { extractByKeyword } from './extractor/keyword.js';
 import { mapRawToTikTokPost } from './mapper/postMapper.js';
 import { classifyTier } from './ranker/classifier.js';
 import { rankPosts } from './ranker/ranker.js';
+import { filterBrazilianPosts } from './filter/brazil.js';
 import { writeJson } from './formatter/json.js';
 import { writeCsv } from './formatter/csv.js';
 import { SortField } from './types/tiktok.js';
@@ -27,6 +28,8 @@ program
   .option('--min-views <n>', 'Filtro mínimo de views', '0')
   .option('--format <format>', 'json | csv | both', 'json')
   .option('--output <file>', 'Arquivo de saída base', 'output/results')
+  .option('--only-brazil', 'Scrape via proxy BR + filtro de posts brasileiros', false)
+  .option('--proxy-country <code>', 'País do proxy (ISO alpha-2, ex.: BR)')
   .action(async (opts) => {
     if (!CONFIG.APIFY_API_TOKEN) {
       console.error(chalk.red('Erro: APIFY_API_TOKEN não definido no ambiente.'));
@@ -41,18 +44,28 @@ program
       const sortBy = opts.sort as SortField;
       const format = opts.format as 'json' | 'csv' | 'both';
       const output = opts.output as string;
+      const onlyBrazil = Boolean(opts.onlyBrazil);
+      const proxyCountryCode = opts.proxyCountry || (onlyBrazil ? 'BR' : undefined);
+      const extractorOptions = { proxyCountryCode, scrapeAdditionalAuthorMeta: onlyBrazil };
+      // Sobre-amostra quando o filtro BR vai descartar itens (mesma lógica do server)
+      const fetchMax = onlyBrazil ? Math.min(Math.max(max * 2, 20), 100) : max;
 
       let rawItems: any[] = [];
       if (opts.keyword) {
-        rawItems = await extractByKeyword([opts.keyword], max);
+        rawItems = await extractByKeyword([opts.keyword], fetchMax, true, extractorOptions);
       } else if (opts.hashtag && opts.hashtag.length) {
-        rawItems = await extractByHashtag(opts.hashtag, max);
+        rawItems = await extractByHashtag(opts.hashtag, fetchMax, true, extractorOptions);
       } else {
         spinner.fail('Você deve informar --keyword ou --hashtag');
         process.exit(1);
       }
 
       let posts = rawItems.map(mapRawToTikTokPost);
+      if (onlyBrazil) {
+        const { kept, removed } = filterBrazilianPosts(posts);
+        posts = kept;
+        if (removed > 0) spinner.info(`🇧🇷 ${removed} posts não-BR descartados`);
+      }
       posts = posts
         .filter((p) => p.metrics.playCount >= minViews)
         .map((p) => ({ ...p, trendTier: classifyTier(p.metrics.playCount, p.engagementRate) }));

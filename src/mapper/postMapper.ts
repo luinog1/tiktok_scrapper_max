@@ -59,6 +59,8 @@ export function mapRawToTikTokPost(raw: any): TikTokPost {
       nickname: raw.authorMeta?.nickName || raw.author?.nickname || '',
       followers: Number(raw.authorMeta?.fans || raw.authorStats?.followerCount || 0),
       verified: Boolean(raw.authorMeta?.verified || raw.author?.verified),
+      region: raw.authorMeta?.region || raw.author?.region || undefined,
+      signature: raw.authorMeta?.signature || raw.author?.signature || undefined,
     },
     metrics: {
       playCount,
@@ -76,6 +78,7 @@ export function mapRawToTikTokPost(raw: any): TikTokPost {
     },
     engagementRate,
     trendTier: 'NORMAL',
+    locationCreated: raw.locationCreated || undefined,
     videoUrl,
     coverUrl,
     images,

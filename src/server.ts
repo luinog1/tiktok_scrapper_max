@@ -10,6 +10,7 @@ import { extractByKeyword } from './extractor/keyword.js';
 import { mapRawToTikTokPost } from './mapper/postMapper.js';
 import { classifyTier } from './ranker/classifier.js';
 import { rankPosts } from './ranker/ranker.js';
+import { filterBrazilianPosts } from './filter/brazil.js';
 import { writeJson } from './formatter/json.js';
 import { writeCsv } from './formatter/csv.js';
 import { SortField } from './types/tiktok.js';
@@ -108,11 +109,43 @@ app.post('/run', async (req, res) => {
        * É um add-on pago da Apify; envie false para economizar créditos.
        */
       downloadVideos = true,
+      /**
+       * FILTRO BRASIL (agora no backend, não só no frontend):
+       * - `onlyBrazil: true` → scrape via proxy residencial no Brasil
+       *   (proxyCountryCode: 'BR'), pede `authorMeta.region` à Apify e
+       *   filtra server-side por região da conta + heurística PT-BR,
+       *   ANTES do ranqueamento e do corte de top N.
+       * - `proxyCountry` (ISO alpha-2 opcional) permite outro país de
+       *   proxy sem ativar o filtro linguístico.
+       */
+      onlyBrazil = false,
+      proxyCountry,
     } = req.body || {};
 
     if (!keyword && (!Array.isArray(hashtags) || hashtags.length === 0)) {
       return res.status(400).json({ ok: false, error: 'Provide "keyword" or "hashtags" (array)' });
     }
+
+    const wantBrazil = Boolean(onlyBrazil);
+    const proxyCountryCode =
+      String(proxyCountry || (wantBrazil ? 'BR' : '')).trim().toUpperCase() || undefined;
+
+    const requestedMax = Math.max(1, Number(max) || CONFIG.DEFAULT_MAX_RESULTS);
+    /**
+     * Sobre-amostragem: o filtro BR descarta itens, então pedimos mais à
+     * Apify (2x, mín. 20, teto 100) para o resultado final não "afunilar"
+     * (ex.: 15 vira 3). Atenção: com `downloadVideos: true` isso também
+     * aumenta o custo do add-on de download — os vídeos descartados já
+     * foram baixados pela Apify.
+     */
+    const fetchMax = wantBrazil
+      ? Math.min(Math.max(requestedMax * 2, 20), 100)
+      : requestedMax;
+
+    const extractorOptions = {
+      proxyCountryCode,
+      scrapeAdditionalAuthorMeta: wantBrazil,
+    };
 
     isRunning = true;
 
@@ -125,12 +158,18 @@ app.post('/run', async (req, res) => {
     let rawItems: any[] = [];
     try {
       if (keyword) {
-        rawItems = await extractByKeyword([String(keyword)], Number(max), Boolean(downloadVideos));
+        rawItems = await extractByKeyword(
+          [String(keyword)],
+          fetchMax,
+          Boolean(downloadVideos),
+          extractorOptions
+        );
       } else {
         rawItems = await extractByHashtag(
           (hashtags as string[]).map(String),
-          Number(max),
-          Boolean(downloadVideos)
+          fetchMax,
+          Boolean(downloadVideos),
+          extractorOptions
         );
       }
     } finally {
@@ -139,6 +178,16 @@ app.post('/run', async (req, res) => {
     }
 
     let posts = rawItems.map(mapRawToTikTokPost);
+
+    // Filtro Brasil ANTES de minViews/rank/corte — corrige o funil em que
+    // o frontend filtrava só os top 10 já cortados pelo backend.
+    let brRemoved = 0;
+    if (wantBrazil) {
+      const { kept, removed } = filterBrazilianPosts(posts);
+      posts = kept;
+      brRemoved = removed;
+    }
+
     posts = posts
       .filter((p) => p.metrics.playCount >= Number(minViews))
       .map((p) => ({ ...p, trendTier: classifyTier(p.metrics.playCount, p.engagementRate) }));
@@ -155,9 +204,10 @@ app.post('/run', async (req, res) => {
     /**
      * CORREÇÃO: antes era `posts.slice(0, 10)` fixo, ignorando o `max`
      * pedido pelo cliente. Agora honra o `max` (limitado a 50 para
-     * evitar payloads enormes).
+     * evitar payloads enormes). Com filtro BR, o corte acontece DEPOIS
+     * da filtragem — o top N devolvido já é 100% brasileiro.
      */
-    const topLimit = Math.min(Math.max(1, Number(max) || 10), 50);
+    const topLimit = Math.min(requestedMax, 50);
 
     return res.status(200).json({
       ok: true,
@@ -165,6 +215,7 @@ app.post('/run', async (req, res) => {
       top: posts.slice(0, topLimit),
       output,
       format,
+      ...(wantBrazil ? { brRemoved } : {}),
     });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message || String(error) });

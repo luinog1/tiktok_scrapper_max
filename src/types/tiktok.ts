@@ -8,6 +8,10 @@ export interface TikTokPost {
     nickname: string;
     followers: number;
     verified: boolean;
+    /** País de registro da conta (ISO-3166 alpha-2, ex.: "BR") — `authorMeta.region` da Apify. */
+    region?: string;
+    /** Bio do autor (`authorMeta.signature`). */
+    signature?: string;
   };
   metrics: {
     playCount: number;
@@ -25,6 +29,8 @@ export interface TikTokPost {
   };
   engagementRate: number;
   trendTier: 'VIRAL' | 'HOT' | 'RISING' | 'NORMAL';
+  /** País onde o post foi publicado (`locationCreated` da Apify), quando disponível. */
+  locationCreated?: string;
   /** URL direta do vídeo CDN (vinda da Apify). */
   videoUrl?: string;
   /** URL da imagem de capa/thumbnail. */

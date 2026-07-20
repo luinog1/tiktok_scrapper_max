@@ -59,6 +59,54 @@ curl -X POST http://localhost:3000/run \
   }'
 ```
 
+## Filtro Brasil 🇧🇷 (server-side)
+
+Envie `"onlyBrazil": true` no body do `/run` (funciona para keyword e hashtags):
+
+```bash
+curl -X POST http://localhost:3000/run \
+  -H "Content-Type: application/json" \
+  -d '{ "hashtags": ["receita"], "max": 15, "onlyBrazil": true }'
+```
+
+O que acontece quando `onlyBrazil` está ativo — em três camadas:
+
+1. **IP brasileiro na origem**: o scrape roda com `proxyCountryCode: "BR"`
+   (proxy residencial da Apify no Brasil). O TikTok devolve o que um usuário
+   no Brasil veria — busca por keyword e hashtags passam a refletir a região,
+   como no app.
+2. **Região real da conta**: o run pede `scrapeAdditionalAuthorMeta: true`,
+   que inclui `authorMeta.region` (país de registro da conta) e
+   `locationCreated` (país de publicação). Conta/post `BR` é mantido;
+   conta registrada em outro país é descartada (salvo conteúdo fortemente
+   PT-BR, ex.: brasileiros pelo mundo).
+3. **Heurística de português** (`src/filter/brazil.ts`): fallback para itens
+   sem região — pontua ã/õ, ç, "kkkk", "som original", palavras e hashtags
+   PT-BR. Mantém com score ≥ 3.
+
+O filtro roda **antes** do ranqueamento e do corte de top N (nada de filtrar
+só os 10 já cortados), e o backend **sobre-amostra** a Apify (2× o `max`,
+mín. 20, teto 100) para compensar os descartes. A resposta ganha o campo
+`brRemoved` (quantos posts não-BR foram removidos) e `total` já vem filtrado.
+
+Campos relacionados no body do `/run`:
+
+| Campo | Tipo | Default | Efeito |
+|-------|------|---------|--------|
+| `onlyBrazil` | `boolean` | `false` | proxy BR + filtro server-side + `brRemoved` |
+| `proxyCountry` | `string` | — | só o proxy de país (ISO alpha-2), sem filtro linguístico |
+| `downloadVideos` | `boolean` | `true` | add-on pago da Apify; com `onlyBrazil` a sobre-amostragem também baixa vídeos que serão descartados — envie `false` para economizar |
+
+> **Custo**: proxy residencial por país e `shouldDownloadVideos` são cobrados
+> pela Apify. Para runs baratos: `"onlyBrazil": true, "downloadVideos": false`.
+
+**Frontend (repo do Next.js)**: o proxy `/api/run` de lá hoje *consome* o
+`onlyBrazil` e filtra localmente sobre o top já cortado. Com este backend,
+basta **repassar** o campo no body encaminhado ao `/run` (e pode remover o
+filtro local, ou mantê-lo — vira um no-op). No CLI: `--only-brazil` e
+`--proxy-country <code>`.
+
+
 ## Build
 ```bash
 npm run build
