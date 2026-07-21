@@ -15,6 +15,11 @@ export interface ExtractorOptions {
    * da conta) no resultado — usado pelo filtro "somente Brasil".
    */
   scrapeAdditionalAuthorMeta?: boolean;
+  /**
+   * Token da Apify desta requisição (header `x-apify-token`). Quando
+   * ausente, `runActor` usa CONFIG.APIFY_API_TOKEN (env do servidor).
+   */
+  apifyToken?: string;
 }
 
 /** Converte as opções nos campos aceitos pelo input do actor. */

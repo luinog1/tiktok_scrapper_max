@@ -85,8 +85,8 @@ O que acontece quando `onlyBrazil` está ativo — em três camadas:
    PT-BR. Mantém com score ≥ 3.
 
 O filtro roda **antes** do ranqueamento e do corte de top N (nada de filtrar
-só os 10 já cortados), e o backend **sobre-amostra** a Apify (2× o `max`,
-mín. 20, teto 100) para compensar os descartes. A resposta ganha o campo
+só os 10 já cortados), e o backend **sobre-amostra** a Apify (3× o `max`,
+mín. 30, teto 150) para compensar os descartes. A resposta ganha o campo
 `brRemoved` (quantos posts não-BR foram removidos) e `total` já vem filtrado.
 
 Campos relacionados no body do `/run`:
@@ -101,10 +101,15 @@ Campos relacionados no body do `/run`:
 > pela Apify. Para runs baratos: `"onlyBrazil": true, "downloadVideos": false`.
 
 **Frontend (repo do Next.js)**: o proxy `/api/run` de lá hoje *consome* o
-`onlyBrazil` e filtra localmente sobre o top já cortado. Com este backend,
-basta **repassar** o campo no body encaminhado ao `/run` (e pode remover o
-filtro local, ou mantê-lo — vira um no-op). No CLI: `--only-brazil` e
-`--proxy-country <code>`.
+`onlyBrazil` e filtra localmente sobre o top já cortado — **por isso o filtro
+BR do backend nunca ativava**. Duas formas de corrigir:
+
+1. **Recomendado** — no proxy do frontend, repasse `onlyBrazil` no body
+   encaminhado ao `/run` (e remova o filtro local, que vira redundante).
+2. **Sem mexer no body** — envie o header `x-only-brazil: 1` (ou a query
+   `?onlyBrazil=1`) na chamada ao `/run`; o backend aceita as três formas.
+
+No CLI: `--only-brazil` e `--proxy-country <code>`.
 
 
 ## Build

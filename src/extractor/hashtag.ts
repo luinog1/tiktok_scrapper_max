@@ -22,7 +22,9 @@ export async function extractByHashtag(
 ) {
   const cleanTags = hashtags.map((h) => h.replace(/^#/, ''));
   const limit = Math.max(1, Number(maxResults) || CONFIG.DEFAULT_MAX_RESULTS);
-  return runActor(CONFIG.APIFY_ACTOR_TIKTOK, {
+  return runActor(
+    CONFIG.APIFY_ACTOR_TIKTOK,
+    {
     hashtags: cleanTags,
     resultsPerPage: limit,
     ...regionActorInput(options),
@@ -36,5 +38,7 @@ export async function extractByHashtag(
      */
     shouldDownloadVideos: downloadVideos,
     shouldDownloadCovers: false,
-  });
+    },
+    options.apifyToken
+  );
 }

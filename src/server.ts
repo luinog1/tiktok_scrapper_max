@@ -44,7 +44,7 @@ function corsMiddleware(req: Request, res: Response, next: NextFunction) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, x-api-key, x-apify-token'
+    'Content-Type, x-api-key, x-apify-token, x-only-brazil'
   );
   // Permite ao frontend ler o nome/tamanho do arquivo no download via fetch
   res.setHeader(
@@ -126,55 +126,58 @@ app.post('/run', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Provide "keyword" or "hashtags" (array)' });
     }
 
-    const wantBrazil = Boolean(onlyBrazil);
+    /**
+     * `onlyBrazil` também pode chegar via header `x-only-brazil` ou query
+     * `?onlyBrazil=1`: o proxy do frontend atual REMOVE o campo do body
+     * antes de repassar ao backend (era por isso que o filtro BR nunca
+     * ativava aqui e tudo era afunilado no frontend sobre o top já cortado).
+     */
+    const onlyBrazilHeader = (req.header('x-only-brazil') || String(req.query.onlyBrazil || ''))
+      .trim()
+      .toLowerCase();
+    const wantBrazil = Boolean(onlyBrazil) || ['1', 'true', 'yes'].includes(onlyBrazilHeader);
     const proxyCountryCode =
       String(proxyCountry || (wantBrazil ? 'BR' : '')).trim().toUpperCase() || undefined;
 
     const requestedMax = Math.max(1, Number(max) || CONFIG.DEFAULT_MAX_RESULTS);
     /**
      * Sobre-amostragem: o filtro BR descarta itens, então pedimos mais à
-     * Apify (2x, mín. 20, teto 100) para o resultado final não "afunilar"
+     * Apify (3x, mín. 30, teto 150) para o resultado final não "afunilar"
      * (ex.: 15 vira 3). Atenção: com `downloadVideos: true` isso também
      * aumenta o custo do add-on de download — os vídeos descartados já
      * foram baixados pela Apify.
      */
     const fetchMax = wantBrazil
-      ? Math.min(Math.max(requestedMax * 2, 20), 100)
+      ? Math.min(Math.max(requestedMax * 3, 30), 150)
       : requestedMax;
 
     const extractorOptions = {
       proxyCountryCode,
       scrapeAdditionalAuthorMeta: wantBrazil,
+      // Token do header desta requisição — passado explicitamente ao
+      // cliente Apify. (Antes, o server mutava CONFIG em runtime, mas o
+      // ApifyClient era criado no import do módulo com o token antigo,
+      // então o header nunca tinha efeito.)
+      apifyToken: headerToken || undefined,
     };
 
     isRunning = true;
 
-    // Se vier token pelo header, injeta no CONFIG em runtime para esta requisição
-    const originalToken = CONFIG.APIFY_API_TOKEN;
-    if (!originalToken && headerToken) {
-      (CONFIG as any).APIFY_API_TOKEN = headerToken;
-    }
-
     let rawItems: any[] = [];
-    try {
-      if (keyword) {
-        rawItems = await extractByKeyword(
-          [String(keyword)],
-          fetchMax,
-          Boolean(downloadVideos),
-          extractorOptions
-        );
-      } else {
-        rawItems = await extractByHashtag(
-          (hashtags as string[]).map(String),
-          fetchMax,
-          Boolean(downloadVideos),
-          extractorOptions
-        );
-      }
-    } finally {
-      // restaura o token original (não vaza entre requisições)
-      (CONFIG as any).APIFY_API_TOKEN = originalToken;
+    if (keyword) {
+      rawItems = await extractByKeyword(
+        [String(keyword)],
+        fetchMax,
+        Boolean(downloadVideos),
+        extractorOptions
+      );
+    } else {
+      rawItems = await extractByHashtag(
+        (hashtags as string[]).map(String),
+        fetchMax,
+        Boolean(downloadVideos),
+        extractorOptions
+      );
     }
 
     let posts = rawItems.map(mapRawToTikTokPost);

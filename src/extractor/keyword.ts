@@ -21,7 +21,9 @@ export async function extractByKeyword(
   options: ExtractorOptions = {}
 ) {
   const limit = Math.max(1, Number(maxResults) || CONFIG.DEFAULT_MAX_RESULTS);
-  return runActor(CONFIG.APIFY_ACTOR_TIKTOK, {
+  return runActor(
+    CONFIG.APIFY_ACTOR_TIKTOK,
+    {
     searchQueries: queries,
     searchSection: '',
     resultsPerPage: limit,
@@ -30,5 +32,7 @@ export async function extractByKeyword(
     // (URLs da CDN do TikTok são atreladas à sessão). Add-on pago da Apify.
     shouldDownloadVideos: downloadVideos,
     shouldDownloadCovers: false,
-  });
+    },
+    options.apifyToken
+  );
 }
