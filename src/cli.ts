@@ -48,13 +48,21 @@ program
       const proxyCountryCode = opts.proxyCountry || (onlyBrazil ? 'BR' : undefined);
       const extractorOptions = { proxyCountryCode, scrapeAdditionalAuthorMeta: onlyBrazil };
       // Sobre-amostra quando o filtro BR vai descartar itens (mesma lógica do server)
-      const fetchMax = onlyBrazil ? Math.min(Math.max(max * 2, 20), 100) : max;
+      const fetchMax = onlyBrazil ? Math.min(Math.max(max * 3, 30), 150) : max;
+
+      // Em modo BR usamos BUSCA (localizada por proxy) em vez do feed de
+      // hashtag (global). Ver comentários em src/server.ts e src/filter/brazil.ts.
+      const brViaSearch = onlyBrazil && Boolean(opts.hashtag?.length) && !opts.keyword;
+      const localized = onlyBrazil && (Boolean(opts.keyword) || brViaSearch);
 
       let rawItems: any[] = [];
       if (opts.keyword) {
         rawItems = await extractByKeyword([opts.keyword], fetchMax, true, extractorOptions);
       } else if (opts.hashtag && opts.hashtag.length) {
-        rawItems = await extractByHashtag(opts.hashtag, fetchMax, true, extractorOptions);
+        const terms = (opts.hashtag as string[]).map((h) => h.replace(/^#/, ''));
+        rawItems = brViaSearch
+          ? await extractByKeyword(terms, fetchMax, true, extractorOptions)
+          : await extractByHashtag(terms, fetchMax, true, extractorOptions);
       } else {
         spinner.fail('Você deve informar --keyword ou --hashtag');
         process.exit(1);
@@ -62,7 +70,7 @@ program
 
       let posts = rawItems.map(mapRawToTikTokPost);
       if (onlyBrazil) {
-        const { kept, removed } = filterBrazilianPosts(posts);
+        const { kept, removed } = filterBrazilianPosts(posts, { proxyLocalized: localized });
         posts = kept;
         if (removed > 0) spinner.info(`🇧🇷 ${removed} posts não-BR descartados`);
       }

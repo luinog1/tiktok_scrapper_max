@@ -120,6 +120,15 @@ app.post('/run', async (req, res) => {
        */
       onlyBrazil = false,
       proxyCountry,
+      /**
+       * Em modo BR, usar BUSCA (searchQueries) em vez do feed de hashtag.
+       * Padrão TRUE — o feed de hashtag do TikTok (`/tag/x`) é GLOBAL e não
+       * respeita o proxy do país (por isso `#shopee` via proxy BR voltava
+       * contas tailandesas). Já a BUSCA é localizada por região do proxy —
+       * é o que o app faz quando você pesquisa e vê tudo em PT. Envie
+       * `brUseSearch: false` para forçar o feed de hashtag (global) + filtro.
+       */
+      brUseSearch = true,
     } = req.body || {};
 
     if (!keyword && (!Array.isArray(hashtags) || hashtags.length === 0)) {
@@ -163,17 +172,47 @@ app.post('/run', async (req, res) => {
 
     isRunning = true;
 
-    let rawItems: any[] = [];
+    /**
+     * Resolve a FONTE dos posts:
+     * - keyword          → busca (search) pela keyword.
+     * - BR + hashtags    → busca pelos termos (o feed de hashtag é GLOBAL;
+     *                      a busca via proxy BR é localizada, como no app).
+     * - hashtags (não-BR)→ feed de hashtag tradicional.
+     * `localized` = a piscina já veio geolocalizada em BR (busca + proxy BR),
+     * então o filtro roda em modo conservador (não afunila).
+     */
+    const brViaSearch = wantBrazil && brUseSearch !== false;
+    let sourceMode: 'search' | 'hashtag';
+    let terms: string[];
+
     if (keyword) {
+      sourceMode = 'search';
+      terms = [String(keyword)];
+    } else if (brViaSearch) {
+      sourceMode = 'search';
+      terms = (hashtags as string[]).map((h) => String(h).replace(/^#/, ''));
+    } else {
+      sourceMode = 'hashtag';
+      terms = (hashtags as string[]).map(String);
+    }
+    const localized = wantBrazil && sourceMode === 'search';
+
+    console.log(
+      `[run] mode=${sourceMode} brazil=${wantBrazil} proxy=${proxyCountryCode || 'none'} ` +
+        `fetchMax=${fetchMax} terms=${JSON.stringify(terms)}`
+    );
+
+    let rawItems: any[] = [];
+    if (sourceMode === 'search') {
       rawItems = await extractByKeyword(
-        [String(keyword)],
+        terms,
         fetchMax,
         Boolean(downloadVideos),
         extractorOptions
       );
     } else {
       rawItems = await extractByHashtag(
-        (hashtags as string[]).map(String),
+        terms,
         fetchMax,
         Boolean(downloadVideos),
         extractorOptions
@@ -182,13 +221,26 @@ app.post('/run', async (req, res) => {
 
     let posts = rawItems.map(mapRawToTikTokPost);
 
+    // Diagnóstico: distribuição de região das contas cruas (antes do filtro).
+    // Se vier tudo "??", o `scrapeAdditionalAuthorMeta` não trouxe região e o
+    // filtro cai na heurística; se vier TH/US/etc., o proxy BR não localizou.
+    if (wantBrazil) {
+      const dist: Record<string, number> = {};
+      for (const p of posts) {
+        const r = (p.author?.region || '??').toUpperCase();
+        dist[r] = (dist[r] || 0) + 1;
+      }
+      console.log(`[run] regiões das ${posts.length} contas cruas:`, JSON.stringify(dist));
+    }
+
     // Filtro Brasil ANTES de minViews/rank/corte — corrige o funil em que
     // o frontend filtrava só os top 10 já cortados pelo backend.
     let brRemoved = 0;
     if (wantBrazil) {
-      const { kept, removed } = filterBrazilianPosts(posts);
+      const { kept, removed } = filterBrazilianPosts(posts, { proxyLocalized: localized });
       posts = kept;
       brRemoved = removed;
+      console.log(`[run] filtro BR: ${kept.length} mantidos, ${removed} removidos (localized=${localized})`);
     }
 
     posts = posts
@@ -218,6 +270,7 @@ app.post('/run', async (req, res) => {
       top: posts.slice(0, topLimit),
       output,
       format,
+      source: sourceMode,
       ...(wantBrazil ? { brRemoved } : {}),
     });
   } catch (error: any) {

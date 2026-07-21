@@ -3,6 +3,7 @@ import {
   brazilSignalScore,
   filterBrazilianPosts,
   looksBrazilian,
+  looksForeign,
 } from '../src/filter/brazil.js';
 import { TikTokPost } from '../src/types/tiktok.js';
 
@@ -103,5 +104,42 @@ describe('filterBrazilianPosts', () => {
     const { kept, removed } = filterBrazilianPosts(posts);
     expect(kept).toHaveLength(2);
     expect(removed).toBe(1);
+  });
+});
+
+describe('proxyLocalized — fonte já geolocalizada em BR (busca via proxy BR)', () => {
+  it('MANTÉM post BR sem sinais de PT (legenda curta/emoji) — não afunila', () => {
+    // Antes (score >= 3) isso era descartado, causando "15 vira 3".
+    const post = makePost({ caption: '🔥🔥 achadinho', author: { nickname: 'loja' } });
+    expect(looksBrazilian(post, false)).toBe(false); // modo estrito antigo
+    expect(looksBrazilian(post, true)).toBe(true); // modo conservador novo
+  });
+
+  it('descarta conta com escrita não-latina (tailandês) mesmo sem região', () => {
+    const post = makePost({ caption: 'ราคาถูกมาก shopee', author: { nickname: 'nunnichii' } });
+    expect(looksForeign(post)).toBe(true);
+    expect(looksBrazilian(post, true)).toBe(false);
+  });
+
+  it('ainda descarta conta registrada fora do BR sem forte PT', () => {
+    const post = makePost({ caption: 'shopee finds', author: { region: 'TH' } });
+    expect(looksBrazilian(post, true)).toBe(false);
+  });
+
+  it('mantém conta BR normalmente', () => {
+    const post = makePost({ caption: 'oferta', author: { region: 'BR' } });
+    expect(looksBrazilian(post, true)).toBe(true);
+  });
+
+  it('filterBrazilianPosts com proxyLocalized mantém a piscina BR e corta só o estrangeiro', () => {
+    const posts = [
+      makePost({ caption: '🔥 achadinho barato' }), // BR sem texto forte
+      makePost({ caption: 'สินค้าราคาถูก', author: { nickname: 'linladaa' } }), // tailandês
+      makePost({ author: { region: 'BR' } }), // BR por região
+      makePost({ caption: 'shopee haul', author: { region: 'TH' } }), // TH explícito
+    ];
+    const { kept, removed } = filterBrazilianPosts(posts, { proxyLocalized: true });
+    expect(kept).toHaveLength(2);
+    expect(removed).toBe(2);
   });
 });

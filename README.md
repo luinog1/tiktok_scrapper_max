@@ -69,31 +69,45 @@ curl -X POST http://localhost:3000/run \
   -d '{ "hashtags": ["receita"], "max": 15, "onlyBrazil": true }'
 ```
 
-O que acontece quando `onlyBrazil` está ativo — em três camadas:
+O que acontece quando `onlyBrazil` está ativo — em quatro camadas:
 
-1. **IP brasileiro na origem**: o scrape roda com `proxyCountryCode: "BR"`
-   (proxy residencial da Apify no Brasil). O TikTok devolve o que um usuário
-   no Brasil veria — busca por keyword e hashtags passam a refletir a região,
-   como no app.
-2. **Região real da conta**: o run pede `scrapeAdditionalAuthorMeta: true`,
+1. **BUSCA em vez de feed de hashtag** (a correção principal): o feed de
+   hashtag do TikTok (`/tag/x`) é **global** e **ignora o país do proxy** —
+   `#shopee` via proxy BR voltava contas tailandesas (`@shopeeth`, …). Já a
+   **busca** (`searchQueries`) é **localizada por região**: pesquisar
+   "achadinhos" de um IP BR devolve conteúdo BR, igual ao app. Por isso, em
+   modo BR, as hashtags enviadas são tratadas como **termos de busca**.
+   Envie `"brUseSearch": false` para forçar o feed de hashtag global.
+2. **IP brasileiro na origem**: a busca roda com `proxyCountryCode: "BR"`
+   (proxy residencial da Apify no Brasil) — o TikTok responde como responderia
+   a um usuário no Brasil.
+3. **Região real da conta**: o run pede `scrapeAdditionalAuthorMeta: true`,
    que inclui `authorMeta.region` (país de registro da conta) e
-   `locationCreated` (país de publicação). Conta/post `BR` é mantido;
-   conta registrada em outro país é descartada (salvo conteúdo fortemente
-   PT-BR, ex.: brasileiros pelo mundo).
-3. **Heurística de português** (`src/filter/brazil.ts`): fallback para itens
-   sem região — pontua ã/õ, ç, "kkkk", "som original", palavras e hashtags
-   PT-BR. Mantém com score ≥ 3.
+   `locationCreated`. Conta/post `BR` é mantido; conta registrada em outro
+   país é descartada (salvo conteúdo fortemente PT-BR, ex.: brasileiros pelo
+   mundo); escrita não-latina (tailandês/árabe/CJK…) é descartada.
+4. **Filtro conservador** (`src/filter/brazil.ts`): como a piscina já vem
+   geolocalizada em BR, o filtro **confia na fonte** — mantém posts de região
+   desconhecida por padrão e só remove o comprovadamente estrangeiro. (Antes,
+   o score ≥ 3 exigido afunilava a lista já brasileira: 15 → 3. Esse era o
+   bug.) Fora do modo BR-busca, o score estrito continua valendo.
 
 O filtro roda **antes** do ranqueamento e do corte de top N (nada de filtrar
 só os 10 já cortados), e o backend **sobre-amostra** a Apify (3× o `max`,
-mín. 30, teto 150) para compensar os descartes. A resposta ganha o campo
-`brRemoved` (quantos posts não-BR foram removidos) e `total` já vem filtrado.
+mín. 30, teto 150) para compensar os descartes. A resposta ganha `source`
+(`search`/`hashtag`), `brRemoved` e `total` já vem filtrado.
+
+> **Diagnóstico**: cada `/run` loga no servidor o modo, o `proxyCountryCode`,
+> os termos e a **distribuição de região** das contas cruas (`{"BR":18,"??":4}`).
+> Se vier `TH`/`US` dominando, o proxy não localizou; se vier tudo `??`, o
+> `scrapeAdditionalAuthorMeta` não trouxe região. Veja os logs no Render.
 
 Campos relacionados no body do `/run`:
 
 | Campo | Tipo | Default | Efeito |
 |-------|------|---------|--------|
-| `onlyBrazil` | `boolean` | `false` | proxy BR + filtro server-side + `brRemoved` |
+| `onlyBrazil` | `boolean` | `false` | busca localizada BR + filtro server-side + `brRemoved` |
+| `brUseSearch` | `boolean` | `true` | em modo BR, usa busca (localizada) em vez do feed de hashtag (global) |
 | `proxyCountry` | `string` | — | só o proxy de país (ISO alpha-2), sem filtro linguístico |
 | `downloadVideos` | `boolean` | `true` | add-on pago da Apify; com `onlyBrazil` a sobre-amostragem também baixa vídeos que serão descartados — envie `false` para economizar |
 
